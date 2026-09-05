@@ -38,13 +38,15 @@ const PORT = Number(
   8090
 );
 
-const N8N_WEBHOOK_URL =
-  process.env.N8N_WEBHOOK_URL ||
-  "http://localhost:5678/webhook/voice-assistant";
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 
 const CALLBACK_BASE_URL =
   process.env.RELAY_CALLBACK_BASE_URL ||
   `http://localhost:${PORT}`;
+
+if (!N8N_WEBHOOK_URL) {
+  console.warn("N8N_WEBHOOK_URL is not configured");
+}
 
 const SARVAM_API_KEY = process.env.SARVAM_API_KEY;
 
