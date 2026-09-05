@@ -1,0 +1,113 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --accent: #6ee7b7;
+  --accent-2: #60a5fa;
+  --danger: #f87171;
+  --text: #e6e8ec;
+  --muted: #8b909c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app {
+  width: min(640px, 92vw);
+  padding: 32px;
+}
+
+h1 { font-size: 1.4rem; margin-bottom: 20px; font-weight: 600; }
+
+.status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.dot.idle { background: var(--muted); }
+.dot.listening { background: var(--accent-2); animation: pulse 1.2s infinite; }
+.dot.processing { background: #fbbf24; animation: pulse 0.8s infinite; }
+.dot.speaking { background: var(--accent); animation: pulse 1s infinite; }
+.dot.error { background: var(--danger); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.badge {
+  margin-left: auto;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #1f2430;
+  color: var(--muted);
+}
+
+.controls { display: flex; gap: 12px; margin-bottom: 20px; }
+
+.mic-btn, .ghost-btn {
+  font-size: 1rem;
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+}
+
+.mic-btn { background: var(--accent-2); color: #0f1115; font-weight: 600; flex: 1; }
+.mic-btn.recording { background: var(--danger); }
+.ghost-btn { background: transparent; border: 1px solid #2a2f3a; color: var(--text); }
+
+.transcript-pane {
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 220px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.transcript-pane .placeholder { color: var(--muted); }
+
+.turn { margin-bottom: 14px; }
+.turn .role { font-size: 0.75rem; color: var(--muted); margin-bottom: 2px; }
+.turn.user .role { color: var(--accent-2); }
+.turn.assistant .role { color: var(--accent); }
+.turn .content { line-height: 1.4; }
+.turn.partial .content { opacity: 0.6; font-style: italic; }
+
+dialog {
+  border: none;
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  width: min(420px, 90vw);
+  padding: 24px;
+}
+dialog::backdrop { background: rgba(0,0,0,0.6); }
+
+.settings-form label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.settings-form input[type="text"],
+.settings-form input[type="password"] {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #2a2f3a;
+  background: #0f1115;
+  color: var(--text);
+}
+.settings-form menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; }
+.settings-form button { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; }

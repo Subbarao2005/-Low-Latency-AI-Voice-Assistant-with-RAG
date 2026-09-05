@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Voice Assistant — RAG</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>Low-Latency Voice Assistant</h1>
+
+    <section class="status-row">
+      <span id="statusDot" class="dot idle"></span>
+      <span id="statusText">Idle</span>
+      <span id="latencyBadge" class="badge" hidden></span>
+    </section>
+
+    <section class="controls">
+      <button id="micBtn" class="mic-btn">🎙️ Start Talking</button>
+      <button id="settingsBtn" class="ghost-btn">⚙️ Settings</button>
+    </section>
+
+    <section id="transcriptPane" class="transcript-pane" aria-live="polite">
+      <p class="placeholder">Your conversation will appear here…</p>
+    </section>
+
+    <dialog id="settingsDialog">
+      <form method="dialog" class="settings-form">
+        <h2>Connection settings</h2>
+        <label>
+          Relay / Webhook URL
+          <input id="wsUrlInput" type="text" placeholder="ws://localhost:8090" />
+        </label>
+        <label>
+          STT authentication
+          <input type="text" value="Managed by backend" disabled />
+        </label>
+        <label>
+          <input id="streamModeToggle" type="checkbox" checked />
+          Use streaming relay (uncheck to hit n8n webhook directly)
+        </label>
+        <menu>
+          <button value="cancel">Cancel</button>
+          <button id="saveSettingsBtn" value="default">Save</button>
+        </menu>
+      </form>
+    </dialog>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

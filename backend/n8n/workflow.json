@@ -1,0 +1,237 @@
+{
+  "name": "Voice Assistant RAG Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice-assistant",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook: transcript in",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-1200, 0]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Normalize incoming turn payload and prep cache key.\n// NOTE: added after live QA testing surfaced that an empty/whitespace-only transcript\n// (e.g. a false-positive VAD trigger from STT) was silently passed through the entire\n// RAG+LLM+TTS pipeline, producing a nonsense answer instead of being rejected. isValid\n// gates the 'IF valid' node right after this one.\nconst body = $input.item.json.body || $input.item.json;\nconst text = (body.text || '').trim();\nconst turnId = body.turnId;\nconst callbackUrl = body.callbackUrl;\nconst kbVersion = $env.QDRANT_COLLECTION || 'kb';\n\nfunction normalize(q) {\n  return q.toLowerCase().trim().replace(/[^\\w\\s]/g, '').replace(/\\s+/g, ' ');\n}\n\nreturn [{\n  json: {\n    text,\n    turnId,\n    callbackUrl,\n    isFinal: !!body.isFinal,\n    isValid: text.length > 0,\n    cacheKey: `qa:${kbVersion}:${normalize(text)}`\n  }\n}];\n"
+      },
+      "id": "normalize",
+      "name": "Normalize + build cache key",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [-980, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            { "leftValue": "={{$json.isValid}}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "ifValid",
+      "name": "IF valid (non-empty transcript)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-870, 0],
+      "notes": "Added after live QA testing caught an empty-transcript edge case reaching the LLM/TTS pipeline. See workflow README note on 'Normalize' node."
+    },
+    {
+      "parameters": {
+        "url": "={{$json.callbackUrl}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { type: 'error', message: 'empty transcript' } }}"
+      },
+      "id": "respondEmptyError",
+      "name": "Respond: empty transcript error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-870, 200]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{$json.cacheKey}}"
+      },
+      "id": "redisGet",
+      "name": "Redis: check cache",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [-760, 0],
+      "credentials": { "redis": { "id": "redis-creds", "name": "Redis" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            { "leftValue": "={{$json.value}}", "rightValue": "", "operator": { "type": "string", "operation": "notEmpty" } }
+          ]
+        }
+      },
+      "id": "ifCacheHit",
+      "name": "IF cache hit",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-540, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{$('Normalize + build cache key').item.json.callbackUrl}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { type: 'tts_chunk', audio_b64: JSON.parse($json.value).audio_b64, seq: 0 } }}"
+      },
+      "id": "sendCachedAudio",
+      "name": "Send cached audio to callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, -140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.QDRANT_URL}}/collections/{{$env.QDRANT_COLLECTION}}/points/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { vector: $json.queryEmbedding, limit: 3, with_payload: true, score_threshold: 0.2 } }}",
+        "options": { "timeout": 200 }
+      },
+      "id": "qdrantSearch",
+      "name": "Qdrant: retrieve top_k=3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, 140],
+      "notesInFlow": true,
+      "notes": "150ms timeout budget per spec's RAG retrieval latency requirement"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { model: $env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', input: $json.text } }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env.OPENAI_API_KEY}}" }]
+        }
+      },
+      "id": "embedQuery",
+      "name": "OpenAI: embed query only",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-540, 140],
+      "notes": "Only the live query is embedded here -- corpus embeddings are precomputed by backend/ingest/ingest.py"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Build prompt: <=1000 token context budget, last 3 turns of memory, minimized system prompt.\n// Mirrors backend/orchestrator/lib/promptBuilder.js logic.\nconst chunks = ($json.result || []).map(r => r.payload.text);\nconst MAX_CONTEXT_TOKENS = 1000;\nfunction approxTokens(t){ return Math.ceil((t.trim().split(/\\s+/).filter(Boolean).length) * 1.3); }\n\nlet kept = [], used = 0;\nfor (const c of chunks) {\n  const t = approxTokens(c);\n  if (used + t > MAX_CONTEXT_TOKENS) break;\n  kept.push(c); used += t;\n}\n\nconst systemPrompt = \"You are a concise voice assistant. Answer using only the provided context. If the context doesn't contain the answer, say you don't know. Keep replies short and speakable aloud.\";\nconst contextBlock = kept.length ? `Context:\\n${kept.map((c,i)=>`[${i+1}] ${c}`).join('\\n')}` : '';\n\nconst turnId = $('Normalize + build cache key').item.json.turnId;\nconst callbackUrl = $('Normalize + build cache key').item.json.callbackUrl;\nconst userText = $('Normalize + build cache key').item.json.text;\n\nreturn [{ json: { systemPrompt, contextBlock, userText, turnId, callbackUrl, contextTokens: used } }];\n"
+      },
+      "id": "buildPrompt",
+      "name": "Build prompt (context+memory)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [-80, 140]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// PIPELINED LLM -> TTS: streams OpenRouter tokens and forwards short sentence chunks to Sarvam TTS.\nconst systemPrompt = $json.systemPrompt;\nconst contextBlock = $json.contextBlock;\nconst userText = $json.userText;\nconst turnId = $json.turnId;\nconst callbackUrl = $json.callbackUrl;\n\nconst messages = [\n  { role: 'system', content: systemPrompt },\n  ...(contextBlock ? [{ role: 'system', content: contextBlock }] : []),\n  { role: 'user', content: userText },\n];\n\nasync function postCallback(payload) {\n  await this.helpers.httpRequest({ method: 'POST', url: callbackUrl, body: payload, json: true });\n}\n\nconst stream = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://openrouter.ai/api/v1/chat/completions',\n  headers: {\n    Authorization: `Bearer ${$env.OPENROUTER_API_KEY}`,\n    'HTTP-Referer': 'http://localhost:3000',\n    'X-Title': 'Real-Time Voice Assistant',\n  },\n  body: {\n    model: $env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free',\n    stream: true,\n    temperature: 0.2,\n    max_tokens: 180,\n    messages,\n  },\n  json: true,\n  encoding: 'stream',\n});\n\nlet buffer = '';\nlet sentenceBuf = [];\nlet fullText = '';\nlet seq = 0;\nlet ttsQueue = Promise.resolve();\nconst SENTENCE_END = /[.!?]$/;\nconst MAX_WORDS_BEFORE_FLUSH = 15;\n\nasync function flushSentence(words) {\n  if (!words.length) return;\n  const text = words.join(' ');\n  const ttsResp = await this.helpers.httpRequest({\n    method: 'POST',\n    url: $env.SARVAM_TTS_STREAM_URL,\n    headers: { 'api-subscription-key': $env.SARVAM_API_KEY },\n    body: { text, voice: 'default' },\n    json: true,\n  });\n  await postCallback({ type: 'tts_chunk', audio_b64: ttsResp.audio_b64, seq });\n  seq += 1;\n}\n\nfunction enqueueSentence(words) {\n  const queuedWords = [...words];\n  ttsQueue = ttsQueue.then(() => flushSentence(queuedWords));\n}\n\nfor await (const chunk of stream) {\n  buffer += chunk.toString();\n  const lines = buffer.split('\\n');\n  buffer = lines.pop();\n  for (const line of lines) {\n    if (!line.startsWith('data: ')) continue;\n    const payload = line.slice(6).trim();\n    if (payload === '[DONE]') continue;\n    let delta;\n    try { delta = JSON.parse(payload).choices?.[0]?.delta?.content; } catch (e) { continue; }\n    if (!delta) continue;\n    fullText += delta;\n    await postCallback({ type: 'llm_token', text: delta });\n    for (const word of delta.split(/\\s+/).filter(Boolean)) {\n      sentenceBuf.push(word);\n      if (SENTENCE_END.test(word) || sentenceBuf.length >= MAX_WORDS_BEFORE_FLUSH) {\n        enqueueSentence(sentenceBuf);\n        sentenceBuf = [];\n      }\n    }\n  }\n}\nenqueueSentence(sentenceBuf);\nawait ttsQueue;\nawait postCallback({ type: 'done' });\n\nreturn [{ json: { fullText, turnId, cacheValue: JSON.stringify({ answer_text: fullText }) } }];\n"
+      },
+      "id": "pipelinedLlmTts",
+      "name": "PIPELINED: LLM stream -> per-sentence TTS -> callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [140, 140],
+      "notes": "Replaces the old 4-node buffer-then-synthesize chain. See node comment + qa/test_results.md for the measured latency win."
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{$('Normalize + build cache key').item.json.cacheKey}}",
+        "value": "={{$json.cacheValue}}",
+        "expire": true,
+        "ttl": "={{$env.REDIS_CACHE_TTL_SECONDS || 3600}}"
+      },
+      "id": "redisSet",
+      "name": "Redis: write-through cache",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1020, 140],
+      "credentials": { "redis": { "id": "redis-creds", "name": "Redis" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "accepted"
+      },
+      "id": "webhookResponse",
+      "name": "Respond to Webhook (ack only)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [-1200, 300],
+      "notes": "Real payload is streamed asynchronously via callbackUrl to the relay; this just acks the initial POST fast so n8n doesn't hold the HTTP connection open."
+    },
+    {
+      "parameters": {
+        "url": "={{$env.CRM_WEBHOOK_URL}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { transcript: $json.userText, turnId: $json.turnId, capturedAt: new Date().toISOString() } }}"
+      },
+      "id": "crmAction",
+      "name": "Backend action: CRM lead capture (optional)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 340],
+      "disabled": true,
+      "notes": "Enable + wire a trigger condition (e.g. intent classification) to fire this for lead-capture style turns."
+    }
+  ],
+  "connections": {
+    "Webhook: transcript in": {
+      "main": [[{ "node": "Normalize + build cache key", "type": "main", "index": 0 }, { "node": "Respond to Webhook (ack only)", "type": "main", "index": 0 }]]
+    },
+    "Normalize + build cache key": {
+      "main": [[{ "node": "IF valid (non-empty transcript)", "type": "main", "index": 0 }]]
+    },
+    "IF valid (non-empty transcript)": {
+      "main": [
+        [{ "node": "Redis: check cache", "type": "main", "index": 0 }],
+        [{ "node": "Respond: empty transcript error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Redis: check cache": {
+      "main": [[{ "node": "IF cache hit", "type": "main", "index": 0 }]]
+    },
+    "IF cache hit": {
+      "main": [
+        [{ "node": "Send cached audio to callback", "type": "main", "index": 0 }],
+        [{ "node": "OpenAI: embed query only", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenAI: embed query only": {
+      "main": [[{ "node": "Qdrant: retrieve top_k=3", "type": "main", "index": 0 }]]
+    },
+    "Qdrant: retrieve top_k=3": {
+      "main": [[{ "node": "Build prompt (context+memory)", "type": "main", "index": 0 }]]
+    },
+    "Build prompt (context+memory)": {
+      "main": [[{ "node": "PIPELINED: LLM stream -> per-sentence TTS -> callback", "type": "main", "index": 0 }]]
+    },
+    "PIPELINED: LLM stream -> per-sentence TTS -> callback": {
+      "main": [[{ "node": "Redis: write-through cache", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}
