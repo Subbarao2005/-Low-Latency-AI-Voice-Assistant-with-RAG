@@ -52,6 +52,8 @@ const state = {
 
   silenceTimer: null,
   lastPartial: "",
+  pendingTranscript: "",
+  lastSentText: "",
 
   sttReady: false,
 
@@ -75,13 +77,44 @@ function loadSettings() {
     localStorage.getItem("va_settings") || "{}"
   );
 
-  const configuredBackend = window.VOICE_ASSISTANT_CONFIG?.backendUrl || "";
-  const sameOriginBackend = window.location.origin !== "null"
-    ? window.location.origin
-    : "http://localhost:8090";
-  const defaultBackend = configuredBackend || sameOriginBackend;
-  const defaultWsUrl = toWebSocketUrl(defaultBackend);
-  els.wsUrlInput.value = s.wsUrl || defaultWsUrl;
+  const configuredBackend =
+    window.VOICE_ASSISTANT_CONFIG?.backendUrl || "";
+
+  // Production Render backend.
+  const productionBackend =
+    "https://low-latency-ai-voice-assistant-with-rag.onrender.com";
+
+  const sameOriginBackend =
+    window.location.origin !== "null"
+      ? window.location.origin
+      : "http://localhost:8090";
+
+  const defaultBackend =
+    configuredBackend ||
+    (
+      window.location.hostname.endsWith("vercel.app")
+        ? productionBackend
+        : sameOriginBackend
+    );
+
+  const defaultWsUrl =
+    toWebSocketUrl(defaultBackend);
+
+  /*
+   * If an old Vercel WebSocket URL was saved in localStorage,
+   * automatically replace it with the production Render relay.
+   */
+
+  const savedWsUrl =
+    (s.wsUrl || "").trim();
+
+  const isVercel =
+    window.location.hostname.endsWith(".vercel.app");
+
+  els.wsUrlInput.value =
+    isVercel
+      ? toWebSocketUrl(productionBackend)
+      : (savedWsUrl || defaultWsUrl);
 
   els.streamModeToggle.checked =
     s.streamMode !== false;
@@ -111,8 +144,11 @@ function toWebSocketUrl(url) {
 // ------------------------------------------------------------
 
 function setStatus(kind, text) {
-  els.statusDot.className = `dot ${kind}`;
-  els.statusText.textContent = text;
+  els.statusDot.className =
+    `dot ${kind}`;
+
+  els.statusText.textContent =
+    text;
 }
 
 // ------------------------------------------------------------
@@ -124,22 +160,26 @@ function renderTurn(
   content,
   { partial = false, turnKey } = {}
 ) {
-  const existing = turnKey
-    ? els.transcriptPane.querySelector(
-        `[data-turn-key="${turnKey}"]`
-      )
-    : null;
+  const existing =
+    turnKey
+      ? els.transcriptPane.querySelector(
+          `[data-turn-key="${turnKey}"]`
+        )
+      : null;
 
   const placeholder =
-    els.transcriptPane.querySelector(".placeholder");
+    els.transcriptPane.querySelector(
+      ".placeholder"
+    );
 
   if (placeholder) {
     placeholder.remove();
   }
 
   if (existing) {
-    existing.querySelector(".content").textContent =
-      content;
+    existing.querySelector(
+      ".content"
+    ).textContent = content;
 
     existing.classList.toggle(
       "partial",
@@ -149,13 +189,15 @@ function renderTurn(
     return existing;
   }
 
-  const div = document.createElement("div");
+  const div =
+    document.createElement("div");
 
   div.className =
     `turn ${role}${partial ? " partial" : ""}`;
 
   if (turnKey) {
-    div.dataset.turnKey = turnKey;
+    div.dataset.turnKey =
+      turnKey;
   }
 
   div.innerHTML =
@@ -166,10 +208,13 @@ function renderTurn(
     }</div>` +
     `<div class="content"></div>`;
 
-  div.querySelector(".content").textContent =
-    content;
+  div.querySelector(
+    ".content"
+  ).textContent = content;
 
-  els.transcriptPane.appendChild(div);
+  els.transcriptPane.appendChild(
+    div
+  );
 
   els.transcriptPane.scrollTop =
     els.transcriptPane.scrollHeight;
@@ -182,13 +227,15 @@ function renderTurn(
 // ------------------------------------------------------------
 
 function connectRelay() {
-  const url = els.wsUrlInput.value.trim();
+  const url =
+    els.wsUrlInput.value.trim();
 
   if (!url) {
     setStatus(
       "error",
       "Relay URL is missing"
     );
+
     return;
   }
 
@@ -197,7 +244,8 @@ function connectRelay() {
     url
   );
 
-  const ws = new WebSocket(url);
+  const ws =
+    new WebSocket(url);
 
   ws.onopen = () => {
     console.log(
@@ -237,9 +285,10 @@ function connectRelay() {
 
   ws.onmessage = (evt) => {
     try {
-      const msg = JSON.parse(
-        evt.data
-      );
+      const msg =
+        JSON.parse(
+          evt.data
+        );
 
       handleRelayMessage(msg);
     } catch (err) {
@@ -250,7 +299,8 @@ function connectRelay() {
     }
   };
 
-  state.relayWs = ws;
+  state.relayWs =
+    ws;
 }
 
 // ------------------------------------------------------------
@@ -279,14 +329,18 @@ function handleRelayMessage(msg) {
   // LLM TEXT
   // ----------------------------------------------------------
 
-  if (msg.type === "llm_token") {
+  if (
+    msg.type === "llm_token"
+  ) {
     const key =
       `assistant-${msg.turnId}`;
 
     const current =
       (
-        state.streamingAssistantText || ""
-      ) + (msg.text || "");
+        state.streamingAssistantText ||
+        ""
+      ) +
+      (msg.text || "");
 
     state.streamingAssistantText =
       current;
@@ -307,17 +361,20 @@ function handleRelayMessage(msg) {
   // TTS AUDIO
   // ----------------------------------------------------------
 
-  if (msg.type === "tts_chunk") {
+  if (
+    msg.type === "tts_chunk"
+  ) {
     if (
       state.firstAudioByteTs === null
     ) {
       state.firstAudioByteTs =
         performance.now();
 
-      const latencyMs = Math.round(
-        state.firstAudioByteTs -
-        state.turnStartTs
-      );
+      const latencyMs =
+        Math.round(
+          state.firstAudioByteTs -
+          state.turnStartTs
+        );
 
       showLatency(
         latencyMs
@@ -341,7 +398,9 @@ function handleRelayMessage(msg) {
   // TURN COMPLETE
   // ----------------------------------------------------------
 
-  if (msg.type === "done") {
+  if (
+    msg.type === "done"
+  ) {
     const key =
       `assistant-${msg.turnId}`;
 
@@ -371,7 +430,9 @@ function handleRelayMessage(msg) {
   // ERROR
   // ----------------------------------------------------------
 
-  if (msg.type === "error") {
+  if (
+    msg.type === "error"
+  ) {
     console.error(
       "Relay/n8n error:",
       msg.message
@@ -390,7 +451,8 @@ function handleRelayMessage(msg) {
 // ------------------------------------------------------------
 
 function showLatency(ms) {
-  els.latencyBadge.hidden = false;
+  els.latencyBadge.hidden =
+    false;
 
   els.latencyBadge.textContent =
     `first audio: ${ms} ms`;
@@ -505,7 +567,8 @@ function stopPlayback() {
       );
     }
 
-    state.audioCtx = null;
+    state.audioCtx =
+      null;
   }
 
   state.playback = {
@@ -554,12 +617,15 @@ async function startRecording() {
       );
 
     /*
-     * ScriptProcessorNode is used for compatibility with
-     * the current browser implementation.
+     * ScriptProcessorNode is used for compatibility
+     * with the current browser implementation.
+     *
+     * 2048 reduces audio buffering latency compared
+     * with the previous 4096-frame buffer.
      */
     const processor =
       ctx.createScriptProcessor(
-        4096,
+        1024,
         1,
         1
       );
@@ -680,7 +746,7 @@ function connectSttStream() {
    * Instead:
    *
    * Browser
-   *   -> ws://localhost:8090/stt
+   *   -> wss://low-latency-ai-voice-assistant-with-rag.onrender.com/stt
    *   -> backend relay
    *   -> Sarvam
    *
@@ -701,6 +767,13 @@ function connectSttStream() {
     return;
   }
 
+  /*
+   * The Settings field must contain only:
+   *
+   * wss://low-latency-ai-voice-assistant-with-rag.onrender.com
+   *
+   * /stt is appended automatically here.
+   */
   const sttUrl =
     `${relayUrl}/stt`;
 
@@ -859,13 +932,12 @@ function connectSttStream() {
             );
 
             /*
-             * The current Sarvam STT WebSocket path
-             * returns transcript data through the nested
-             * data object.
+             * Sarvam can send multiple transcript
+             * updates for the same utterance.
              *
-             * Treat the received transcript as a usable
-             * transcript and let the silence heuristic
-             * trigger the assistant.
+             * Do NOT immediately send every update.
+             * onSttResult() debounces them and sends
+             * only the latest transcript after silence.
              */
             onSttResult(
               transcript,
@@ -953,7 +1025,10 @@ function onSttResult(
   transcript,
   isFinal
 ) {
-  if (!transcript) {
+  const cleanText =
+    (transcript || "").trim();
+
+  if (!cleanText) {
     return;
   }
 
@@ -963,11 +1038,19 @@ function onSttResult(
   stopPlayback();
 
   state.lastPartial =
-    transcript;
+    cleanText;
+
+  /*
+   * Always keep the newest transcript.
+   * This prevents an earlier partial transcript
+   * from being sent when a newer one has arrived.
+   */
+  state.pendingTranscript =
+    cleanText;
 
   renderTurn(
     "user",
-    transcript,
+    cleanText,
     {
       partial: !isFinal,
       turnKey: "user-current",
@@ -978,29 +1061,55 @@ function onSttResult(
     state.silenceTimer
   );
 
+  /*
+   * If the STT provider explicitly marks
+   * the transcript as final, send immediately.
+   */
   if (isFinal) {
+    state.pendingTranscript =
+      "";
+
     sendTranscriptTurn(
-      transcript,
+      cleanText,
       true
     );
-  } else {
-    /*
-     * Optimization:
-     * initiate the assistant after a short
-     * pause instead of waiting unnecessarily
-     * for a long finalization delay.
-     */
-    state.silenceTimer =
-      setTimeout(
-        () => {
-          sendTranscriptTurn(
-            transcript,
-            false
-          );
-        },
-        SILENCE_MS
-      );
+
+    return;
   }
+
+  /*
+   * Debounce partial transcripts.
+   *
+   * Sarvam may emit:
+   *
+   *   "Hello"
+   *   "Hello hello"
+   *   "Hello hello how"
+   *   "Hello hello how are you"
+   *
+   * We wait until the user stops speaking,
+   * then send only the latest transcript.
+   */
+  state.silenceTimer =
+    setTimeout(
+      () => {
+        const latest =
+          state.pendingTranscript.trim();
+
+        if (!latest) {
+          return;
+        }
+
+        state.pendingTranscript =
+          "";
+
+        sendTranscriptTurn(
+          latest,
+          false
+        );
+      },
+      SILENCE_MS
+    );
 }
 
 // ------------------------------------------------------------
@@ -1011,6 +1120,9 @@ function sendTranscriptTurn(
   text,
   isFinal
 ) {
+  const cleanText =
+    (text || "").trim();
+
   if (
     !state.relayWs ||
     state.relayWs.readyState !==
@@ -1024,25 +1136,38 @@ function sendTranscriptTurn(
     return;
   }
 
-  if (!text.trim()) {
+  if (!cleanText) {
     return;
   }
 
   /*
-   * Avoid repeatedly sending the exact same
-   * partial transcript.
+   * Prevent duplicate turns.
+   *
+   * This is important because Sarvam can emit
+   * both partial and final transcript messages.
    */
   if (
-    !isFinal &&
-    state.lastSentPartial ===
-      text
+    cleanText ===
+    state.lastSentText
   ) {
+    console.warn(
+      "Duplicate transcript ignored:",
+      cleanText
+    );
+
     return;
   }
 
-  state.lastSentPartial =
-    text;
+  state.lastSentText =
+    cleanText;
 
+  /*
+   * Create a unique turn ID.
+   *
+   * The backend uses this ID to associate
+   * n8n callbacks with the correct browser
+   * WebSocket connection.
+   */
   state.turnId =
     `${Date.now()}-` +
     `${Math.random()
@@ -1058,11 +1183,20 @@ function sendTranscriptTurn(
   state.streamingAssistantText =
     "";
 
+  console.log(
+    `[${state.turnId}] Sending transcript to relay:`,
+    cleanText
+  );
+
   setStatus(
     "processing",
     "Thinking…"
   );
 
+  /*
+   * Convert the current user transcript
+   * from partial -> final in the UI.
+   */
   const finalEl =
     els.transcriptPane.querySelector(
       '[data-turn-key="user-current"]'
@@ -1078,10 +1212,15 @@ function sendTranscriptTurn(
     );
   }
 
+  /*
+   * Send transcript to backend relay.
+   *
+   * The backend then forwards it to n8n.
+   */
   state.relayWs.send(
     JSON.stringify({
       type: "transcript",
-      text,
+      text: cleanText,
       isFinal,
       turnId:
         state.turnId,
@@ -1106,6 +1245,9 @@ function stopRecording() {
 
   state.silenceTimer =
     null;
+
+  state.pendingTranscript =
+    "";
 
   els.micBtn.textContent =
     "🎙️ Start Talking";
